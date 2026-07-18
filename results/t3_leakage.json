@@ -1,0 +1,94 @@
+{
+ "n_images": 1000,
+ "split_sizes": {
+  "train": 700,
+  "val": 150,
+  "test": 150
+ },
+ "cross_split_pairs_by_hamming": {
+  "0": 0,
+  "2": 0,
+  "4": 1,
+  "6": 3,
+  "8": 11
+ },
+ "examples": [
+  {
+   "hamming": 4,
+   "a": "20250305_034430_color_png.rf.06fc3077e1b8155e87a62960e61077d8",
+   "a_split": "val",
+   "b": "20250305_034515_color_png.rf.eaf94a5ed0a848454b62f7e9bd07455e",
+   "b_split": "test"
+  },
+  {
+   "hamming": 5,
+   "a": "20250305_061011_color_png.rf.97c917e65ec839a52c843169b8537563",
+   "a_split": "train",
+   "b": "20250305_024047_color_png.rf.7c34ce2cc251d8b46e82c5457cf323b9",
+   "b_split": "val"
+  },
+  {
+   "hamming": 6,
+   "a": "20250227_172520_color_png.rf.8eaad20be9ebdc947c2a8ad1b13a8bee",
+   "a_split": "train",
+   "b": "20250227_183322_color_png.rf.5406296be373b0c0b17eb551838360b6",
+   "b_split": "test"
+  },
+  {
+   "hamming": 7,
+   "a": "20250227_185245_color_png.rf.33b80f4efb3672bba57be65af0846b12",
+   "a_split": "val",
+   "b": "20250227_141738_color_png.rf.01bf38e6cf5703c762e51dbf3ddefe94",
+   "b_split": "test"
+  },
+  {
+   "hamming": 8,
+   "a": "20250227_141418_color_png.rf.8966749a71e9c8de22a6a8db2c796d46",
+   "a_split": "train",
+   "b": "20250305_124840_color_png.rf.c51152682c5aa89779a475e7502416bd",
+   "b_split": "test"
+  },
+  {
+   "hamming": 8,
+   "a": "20250227_180940_color_png.rf.5bc56d4c5e41ddad3299b02e66464f74",
+   "a_split": "train",
+   "b": "20250227_183322_color_png.rf.5406296be373b0c0b17eb551838360b6",
+   "b_split": "test"
+  },
+  {
+   "hamming": 8,
+   "a": "20250305_024047_color_png.rf.7c34ce2cc251d8b46e82c5457cf323b9",
+   "a_split": "val",
+   "b": "20250227_173255_color_png.rf.60bb9cc6e5f9b1818ed3313f24208f28",
+   "b_split": "test"
+  },
+  {
+   "hamming": 8,
+   "a": "20250305_054850_color_png.rf.f65e6591890f8c0bb8216265efd76890",
+   "a_split": "val",
+   "b": "20250227_190037_color_png.rf.f9ccbd005a22d914cff034380ef75dce",
+   "b_split": "test"
+  },
+  {
+   "hamming": 8,
+   "a": "20250305_062739_color_png.rf.c38f66bceceb43b5b5a76b5e618779e7",
+   "a_split": "train",
+   "b": "20250227_184207_color_png.rf.b7ce836afa23d4804f98e581a9dfe002",
+   "b_split": "test"
+  },
+  {
+   "hamming": 8,
+   "a": "20250305_103343_color_png.rf.7598ab2643a6f3e2224e3a0762a46f74",
+   "a_split": "train",
+   "b": "20250305_034515_color_png.rf.eaf94a5ed0a848454b62f7e9bd07455e",
+   "b_split": "test"
+  },
+  {
+   "hamming": 8,
+   "a": "20250305_124240_color_png.rf.ab3269c04d3459e998d262d83ab3e7d2",
+   "a_split": "train",
+   "b": "20250227_171154_color_png.rf.77b82e1bf4b7645a9ca1e5ab117100c2",
+   "b_split": "val"
+  }
+ ]
+}
