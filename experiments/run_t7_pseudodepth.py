@@ -1,17 +1,19 @@
 """
-run_t6_crossdataset.py — T6 generality probe (optional in the brief).
+run_t7_pseudodepth.py — does ESTIMATED (monocular) depth help on PothRGBD?
 
-Question: does MONOCULAR pseudo-depth help on a DIFFERENT, RGB-only pothole dataset?
-Dataset: pothole600 (from Pothole-Mix / SHREC 2022) — 240 train / 180 val / 180 test, 400x400 RGB,
-binary masks. Pseudo-depth from MiDaS_small (relative inverse depth, per-image min-max to [0,1]) —
-this is NOT metric depth; framed as a generality probe.
+A within-PothRGBD companion to the metric-depth (T1) and surface-normal (T2) tests:
+instead of the sensor's metric depth, we feed a MONOCULAR pseudo-depth channel
+(MiDaS) estimated from the same RGB image. This asks whether *any* depth signal ---
+even a free, estimated one --- adds pothole-segmentation accuracy.
 
-Compares RGB vs RGB+pseudo-D (early fusion, 4-ch) under the SAME protocol as T1: ImageNet-pretrained
-ResNet-18 U-Net, conv1 inflated (RGB filters copied, pseudo-depth channel = mean of RGB filters),
-ImageNet-normalised RGB channels, Dice+BCE, AdamW lr1e-3/wd1e-4, 18 ep, best-val-IoU, seeds {41,42,43}.
-Pseudo-depth is precomputed once and cached to results/t6_pseudodepth/.
+Same controlled protocol as T1/T2: ImageNet-pretrained U-Net, conv1 inflated
+(RGB filters copied, pseudo-depth channel = mean of the three RGB filters),
+ImageNet-normalized RGB channels, Dice+BCE, AdamW lr1e-3/wd1e-4, 18 ep,
+best-val-IoU, seeds {41,42,43}. Uses the scene-disjoint split when POTHRGBD_SPLIT
+is set (primary), else the fixed random split. Pseudo-depth is relative inverse
+depth, per-image min-max normalized to [0,1]; it is cached once.
 """
-import os, sys, time, json, glob, subprocess, random
+import os, sys, time, json, random
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
@@ -19,11 +21,10 @@ import torch, torch.nn as nn
 import segmentation_models_pytorch as smp
 from torch.utils.data import DataLoader, Dataset
 from PIL import Image
+import pothrgbd_data as D
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PM = os.environ.get("POTHOLEMIX_ROOT",
-                    os.path.join(HERE, "..", "dataset", "pothole-mix-extracted", "pothole-mix"))
-SUB = "pothole600"
+DATA_ROOT = os.environ.get("POTHRGBD_ROOT", os.path.join(HERE, "..", "dataset", "PothRGBD 2"))
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 EPOCHS = int(os.environ.get("EPOCHS", "18"))
 IMG = (256, 256)
@@ -31,9 +32,9 @@ BS = int(os.environ.get("BS", "8"))
 ENCODER = "resnet18"
 SEEDS = [int(s) for s in os.environ.get("SEEDS", "41,42,43").split(",")]
 MODES = ["rgb", "rgbpd"]
-CACHE = os.path.join(HERE, "..", "results", "t6_pseudodepth")
-OUT = os.path.join(HERE, "..", "results", os.environ.get("OUT", "t6_crossdataset.json"))
-SPLITS = {"training": "train", "validation": "val", "testing": "test"}
+CACHE = os.path.join(HERE, "..", "results", "pseudodepth_pothrgbd")
+OUT = os.path.join(HERE, "..", "results", os.environ.get("OUT", "t7_pseudodepth.json"))
+IN_CH = {"rgb": 3, "rgbpd": 4}
 
 MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 STD = np.array([0.229, 0.224, 0.225], np.float32)
@@ -41,31 +42,6 @@ IMEAN = torch.tensor(MEAN).view(1, 3, 1, 1).to(DEVICE)
 ISTD = torch.tensor(STD).view(1, 3, 1, 1).to(DEVICE)
 
 
-def git_hash():
-    try:
-        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=HERE).decode().strip()
-    except Exception:
-        return "unknown"
-
-
-def list_split(split):
-    imgs = sorted(glob.glob(os.path.join(PM, split, SUB, "images", "*")))
-    return [(p, p.replace(os.sep + "images" + os.sep, os.sep + "masks" + os.sep)) for p in imgs]
-
-
-def load_rgb(path):
-    im = Image.open(path).convert("RGB").resize(IMG, Image.BILINEAR)
-    return np.asarray(im, np.float32) / 255.0
-
-
-def load_mask(path):
-    # pothole600 masks encode the pothole in RED (255,0,0) on black -> use max over
-    # channels (grayscale/luminance would drop red below threshold and yield empty masks).
-    a = np.asarray(Image.open(path).convert("RGB").resize(IMG, Image.NEAREST))
-    return (a.max(axis=-1) > 127).astype(np.float32)[..., None]
-
-
-# ---------- pseudo-depth (MiDaS, cached) ----------
 def midas_model():
     import builtins; builtins.input = lambda *a, **k: "y"   # auto-trust standard MiDaS hub repos
     import warnings; warnings.filterwarnings("ignore")
@@ -77,49 +53,46 @@ def midas_depth(model, img_path):
     a = (np.asarray(im, np.float32) / 255.0 - MEAN) / STD
     t = torch.from_numpy(a).permute(2, 0, 1)[None].float()
     with torch.no_grad():
-        pred = model(t)                       # (1, h, w)
+        pred = model(t)
         pred = torch.nn.functional.interpolate(pred.unsqueeze(1), size=IMG,
                                                mode="bicubic", align_corners=False).squeeze(1)[0]
     d = pred.numpy()
-    return ((d - d.min()) / (d.max() - d.min() + 1e-7)).astype(np.float32)   # per-image [0,1]
+    return ((d - d.min()) / (d.max() - d.min() + 1e-7)).astype(np.float32)
 
 
-def key_of(split, img_path):
-    return f"{split}_{os.path.splitext(os.path.basename(img_path))[0]}"
-
-
-def precompute_pseudodepth():
+def precompute(samples):
     os.makedirs(CACHE, exist_ok=True)
-    todo = [(sp, ip) for sp in SPLITS for ip, _ in list_split(sp)
-            if not os.path.exists(os.path.join(CACHE, key_of(sp, ip) + ".npy"))]
+    todo = [s for s in samples if not os.path.exists(os.path.join(CACHE, s.key + ".npy"))]
     if not todo:
         print("pseudo-depth cache complete.", flush=True); return
-    print(f"precomputing MiDaS pseudo-depth for {len(todo)} images ...", flush=True)
+    print(f"precomputing MiDaS pseudo-depth for {len(todo)} PothRGBD images ...", flush=True)
     m = midas_model()
-    for i, (sp, ip) in enumerate(todo):
-        np.save(os.path.join(CACHE, key_of(sp, ip) + ".npy"), midas_depth(m, ip))
-        if (i + 1) % 100 == 0:
+    for i, s in enumerate(todo):
+        np.save(os.path.join(CACHE, s.key + ".npy"), midas_depth(m, s.image_path))
+        if (i + 1) % 200 == 0:
             print(f"  {i+1}/{len(todo)}", flush=True)
     print("pseudo-depth cache done.", flush=True)
 
 
-# ---------- dataset ----------
+def load_input(mode, s):
+    rgb = D.load_rgb(s.image_path, IMG)
+    if mode == "rgb":
+        return rgb
+    pd = np.load(os.path.join(CACHE, s.key + ".npy"))[..., None]
+    return np.concatenate([rgb, pd], axis=-1)
+
+
 class DS(Dataset):
-    def __init__(self, items, split, mode, augment):
-        self.items, self.split, self.mode, self.augment = items, split, mode, augment
+    def __init__(self, samples, mode, augment):
+        self.samples, self.mode, self.augment = samples, mode, augment
 
     def __len__(self):
-        return len(self.items)
+        return len(self.samples)
 
     def __getitem__(self, idx):
-        ip, mp = self.items[idx]
-        rgb = load_rgb(ip)
-        if self.mode == "rgbpd":
-            pd = np.load(os.path.join(CACHE, key_of(self.split, ip) + ".npy"))[..., None]
-            x = np.concatenate([rgb, pd], axis=-1)
-        else:
-            x = rgb
-        y = load_mask(mp)
+        s = self.samples[idx]
+        x = load_input(self.mode, s)
+        y = D.rasterize_mask(s.label_path, IMG)[..., None].astype(np.float32)
         if self.augment and random.random() < 0.5:
             x = x[:, ::-1, :].copy(); y = y[:, ::-1, :].copy()
         return torch.from_numpy(x).permute(2, 0, 1).float(), torch.from_numpy(y).permute(2, 0, 1).float()
@@ -148,34 +121,30 @@ def build_model(in_ch):
     return model.to(DEVICE)
 
 
-def per_image_metrics(model, items, split, mode):
+def per_image_metrics(model, split, mode):
     rows = []; model.eval()
     with torch.no_grad():
-        for ip, mp in items:
-            rgb = load_rgb(ip)
-            if mode == "rgbpd":
-                pd = np.load(os.path.join(CACHE, key_of(split, ip) + ".npy"))[..., None]
-                x = np.concatenate([rgb, pd], axis=-1)
-            else:
-                x = rgb
-            y = load_mask(mp)[..., 0]
+        for s in split:
+            x = load_input(mode, s)
+            y = D.rasterize_mask(s.label_path, IMG).astype(np.float32)
             xt = norm_in(torch.from_numpy(x).permute(2, 0, 1)[None].float().to(DEVICE))
             pred = (torch.sigmoid(model(xt))[0, 0].cpu().numpy() >= 0.5).astype(np.float32)
             tp = float((pred * y).sum()); fp = float((pred * (1 - y)).sum())
             fn = float(((1 - pred) * y).sum()); eps = 1e-7
-            rows.append({"key": key_of(split, ip),
-                         "IoU": tp / (tp + fp + fn + eps), "F1": 2 * tp / (2 * tp + fp + fn + eps),
+            depth = D.load_depth(s.depth_path, IMG); in_mask = depth[y > 0]
+            rows.append({"key": s.key, "IoU": tp / (tp + fp + fn + eps),
+                         "F1": 2 * tp / (2 * tp + fp + fn + eps),
                          "Precision": tp / (tp + fp + eps), "Recall": tp / (tp + fn + eps),
-                         "gt_area_frac": float(y.mean())})
+                         "gt_area_frac": float(y.mean()),
+                         "mean_depth": float(in_mask.mean()) if in_mask.size else float(depth.mean())})
     return rows
 
 
-def train_one(mode, seed, tr_items, va_items, te_items):
+def train_one(mode, seed, split):
     set_seed(seed)
-    in_ch = 4 if mode == "rgbpd" else 3
-    tr = DataLoader(DS(tr_items, "training", mode, True), batch_size=BS, shuffle=True, drop_last=True)
-    va = DataLoader(DS(va_items, "validation", mode, False), batch_size=BS, shuffle=False)
-    model = build_model(in_ch)
+    tr = DataLoader(DS(split["train"], mode, True), batch_size=BS, shuffle=True, drop_last=True)
+    va = DataLoader(DS(split["val"], mode, False), batch_size=BS, shuffle=False)
+    model = build_model(IN_CH[mode])
     dice = smp.losses.DiceLoss(mode="binary", from_logits=True); bce = torch.nn.BCEWithLogitsLoss()
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     best, best_state = -1.0, None
@@ -197,27 +166,29 @@ def train_one(mode, seed, tr_items, va_items, te_items):
             best = iou; best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         print(f"  [{mode} seed{seed}] ep{ep+1:02d}/{EPOCHS} valIoU={iou:.3f}", flush=True)
     model.load_state_dict(best_state)
-    rows = per_image_metrics(model, te_items, "testing", mode)
+    rows = per_image_metrics(model, split["test"], mode)
     tm = {k: float(np.mean([r[k] for r in rows])) for k in ["IoU", "F1", "Precision", "Recall"]}
     print(f"  [{mode} seed{seed}] TEST mean {tm}", flush=True)
     return tm, rows
 
 
 def main():
-    print(f"device={DEVICE} dataset={SUB} epochs={EPOCHS} seeds={SEEDS}", flush=True)
-    precompute_pseudodepth()
-    tr_items, va_items, te_items = list_split("training"), list_split("validation"), list_split("testing")
-    print(f"pothole600: train {len(tr_items)} / val {len(va_items)} / test {len(te_items)}", flush=True)
+    split_env = os.environ.get("POTHRGBD_SPLIT")
+    print(f"device={DEVICE} epochs={EPOCHS} seeds={SEEDS} split={'disjoint' if split_env else 'random42'}", flush=True)
+    samples = D.build_index(DATA_ROOT)
+    precompute(samples)
+    split = D.split_from_json(samples, split_env) if split_env else D.split_index(samples, seed=42)
+    print(f"split sizes: train {len(split['train'])} / val {len(split['val'])} / test {len(split['test'])}", flush=True)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    results = {"config": {"encoder": ENCODER, "pretrained": "imagenet", "dataset": SUB,
-                          "pseudo_depth": "MiDaS_small", "epochs": EPOCHS, "img": IMG,
-                          "seeds": SEEDS, "git_hash": git_hash()},
+    results = {"config": {"encoder": ENCODER, "pretrained": "imagenet", "pseudo_depth": "MiDaS_small",
+                          "epochs": EPOCHS, "img": IMG, "seeds": SEEDS,
+                          "split": "disjoint" if split_env else "random42"},
                "runs": [], "per_image": {}}
     t0 = time.time()
     for seed in SEEDS:
         for mode in MODES:
             print(f"\n=== seed {seed} | {mode} ===", flush=True)
-            tm, rows = train_one(mode, seed, tr_items, va_items, te_items)
+            tm, rows = train_one(mode, seed, split)
             results["runs"].append({"arch": "unet", "seed": seed, "mode": mode, "test_mean": tm})
             results["per_image"][f"unet_{seed}_{mode}"] = rows
             json.dump(results, open(OUT, "w"), indent=1)
