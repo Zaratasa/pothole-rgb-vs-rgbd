@@ -16,10 +16,10 @@ pip install -r requirements.txt
 export POTHRGBD_ROOT="/path/to/PothRGBD"   # folder with images/ depths/ labels/
 ```
 
-Runs on Apple Silicon (MPS) or CUDA. **Datasets are third-party and not redistributed here:**
+Runs on Apple Silicon (MPS) or CUDA. **Dataset is third-party and not redistributed here:**
 - **PothRGBD** — Yurdakul & Taşdemir, IEEE Dataport, DOI `10.21227/z8eq-sf60`.
-- **Pothole-Mix / pothole600** (cross-dataset probe) — SHREC 2022, *Computers & Graphics* 107:161–171,
-  DOI `10.1016/j.cag.2022.07.018`.
+
+All experiments (metric depth, surface normals, and monocular pseudo-depth) run on PothRGBD.
 
 ## Reproduce the results
 
@@ -38,10 +38,11 @@ python experiments/run_t3_build_split.py
 POTHRGBD_SPLIT="$PWD/results/split_scene_disjoint.json" \
   ARCHS=unet,deeplabv3plus SEEDS=41,42,43 OUT=t1_clean_split.json python experiments/run_t1_pretrained.py
 
-# T2 — surface-normal encoding · T5 — RGB-degradation · T6 — cross-dataset pseudo-depth
+# T2 — surface-normal encoding · T5 — RGB-degradation · T7 — monocular pseudo-depth (within PothRGBD)
 ARCHS=unet MODES=rgb,rgbn SEEDS=41,42,43 OUT=t2_normals.json python experiments/run_t2_normals.py
 python experiments/run_degraded_local.py --seeds 41,42,43
-SEEDS=41,42,43 python experiments/run_t6_crossdataset.py
+POTHRGBD_SPLIT="$PWD/results/split_scene_disjoint.json" \
+  SEEDS=41,42,43 OUT=t7_pseudodepth.json python experiments/run_t7_pseudodepth.py
 
 # Figures
 python experiments/fig_convergence.py     # -> figures/convergence.pdf
@@ -58,6 +59,17 @@ experiments/   training/audit scripts, pothrgbd_data.py loader, fig_*.py
 stats/         analyze.py — consolidated statistics (regenerates every reported number)
 results/       per-run metrics (IoU/F1/P/R per image + stratifiers + curves) and the scene-disjoint split
 ```
+
+## Authors
+
+Heldiansyah, Riswan Yunida, Muchtar Salim, Muhammad Akbar Hariyono, Rizky Amelia, Novi Shintia
+— Department of Informatics Engineering, Politeknik Negeri Banjarmasin, Indonesia.
+
+## Citation
+
+If you use this code or the scene-disjoint split, please cite the paper (Indonesian Journal of
+Electrical Engineering and Informatics, forthcoming) — Heldiansyah et al., "Rethinking Depth for
+Low-Cost Pothole Segmentation: A Controlled Multi-Regime RGB versus RGB-D Study."
 
 ## License
 
