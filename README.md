@@ -63,7 +63,7 @@ results/       per-run metrics (IoU/F1/P/R per image + stratifiers + curves) and
 ## Authors
 
 Heldiansyah, Riswan Yunida, Muchtar Salim, Muhammad Akbar Hariyono, Rizky Amelia, Novi Shintia
-— Department of Informatics Engineering, Politeknik Negeri Banjarmasin, Indonesia.
+— Politeknik Negeri Banjarmasin (and Politeknik Unggulan Kalimantan), Banjarmasin, Indonesia.
 
 ## Citation
 
